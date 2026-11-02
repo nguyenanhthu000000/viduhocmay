@@ -1,194 +1,195 @@
-<<<<<<< HEAD
-## 1. Tổng quan nhiệm vụ (Task Overview)
-Task 3 đóng vai trò xây dựng hệ thống nền tảng (**Baseline & Classical Machine Learning**) cho toàn bộ đồ án phát hiện giọng nói giả. Nhiệm vụ cốt lõi bao gồm:
-* **Chuyển đổi tín hiệu âm thanh:** Biến đổi các file âm thanh thô thành vector đặc trưng âm học chuyên sâu thông qua kỹ thuật **MFCC** và **LFCC**.
-* **Huấn luyện mô hình:** Xây dựng hệ thống học máy cổ điển gồm 4 mô hình (*Logistic Regression, SVM, Random Forest, XGBoost*).
-* **Kiểm định chéo an toàn:** Áp dụng chiến lược **GroupKFold** chia theo `speaker_id` để ngăn chặn triệt để hiện tượng rò rỉ dữ liệu (Data Leakage) giữa người nói tập train và test.
-* **Đánh giá hiệu năng:** Xuất các chỉ số chuẩn quốc tế (**ROC-AUC, F1-Score, EER**) kèm theo biểu đồ trực quan và bảng kết quả thực nghiệm.
+# Task 3 – Baseline & Classical Machine Learning (phát hiện giọng nói giả tiếng Việt)
 
-## 2. Cấu trúc các file và Chi tiết kỹ thuật
+Task 3 xây dựng hệ thống nền tảng cho đồ án phát hiện giọng nói giả:
 
-| File | Nội dung & Kỹ thuật áp dụng |
-| :--- | :--- |
-| `src/features_handcrafted.py` | • Trích xuất 13 hệ số **MFCC** và **LFCC** chuẩn hóa có đầy đủ cả `mean` (trung bình) và `std` (độ lệch chuẩn).<br>• Sử dụng bộ lọc tuyến tính (Linear-frequency filterbank) và biến đổi DCT cho LFCC.<br>• Kiểm tra và xử lý linh hoạt tên cột trong metadata để tránh lỗi đường dẫn, đóng gói nén vào `features/mfcc_features.npz`. |
-| `src/train_classical.py` | • Thực hiện ghép dữ liệu chuẩn xác qua `clip_id` và lọc đúng tập `split == 'train'`.<br>• Sử dụng **GroupKFold (5 folds)** dựa trên `speaker_id` để tìm kiếm siêu tham số tối ưu.<br>• Tự động `fit()` lại mô hình tốt nhất trên **toàn bộ tập train** trước khi lưu artifact vào `models/best_model.pkl` để phục vụ tích hợp Web Demo (Task 5). |
-| `src/evaluate.py` | • Tự động nạp mô hình, lọc tập kiểm tra `test_seen` và tính toán các chỉ số chuyên sâu.<br>• Tính điểm cân bằng lỗi **EER (Equal Error Rate)** thông qua nội suy hàm số.<br>• Xuất bảng kết quả chi tiết ra file `results/test_seen_predictions.csv` và vẽ biểu đồ đường cong ROC (`results/roc_curve.png`). |
-| `requirements.txt` | • Danh sách các thư viện Python cần thiết (`librosa`, `scikit-learn`, `xgboost`, `matplotlib`, `joblib`,...). |
+- Trích đặc trưng thủ công **MFCC + LFCC** (vector 52 chiều) từ file âm thanh.
+- Huấn luyện 4 mô hình học máy cổ điển: **Logistic Regression, SVM (RBF), Random Forest, XGBoost**.
+- Chọn siêu tham số bằng **GroupKFold theo `speaker_id`** để tránh rò rỉ người nói giữa train và validation.
+- Đánh giá trên tập `test_seen` bằng **ROC-AUC, EER, F1**, kèm ma trận nhầm lẫn và đường cong ROC.
+- Cung cấp lớp `HandcraftedPredictor` để tích hợp vào app demo (Task 5).
+
+> **Trạng thái kết quả:** xem mục 7. Các số liệu cũ (AUC 0,8018 / F1 0,7129 / EER 0,30 trên 99 mẫu) đã bị **gỡ bỏ** vì
+> được tính từ nhãn không hợp lệ (nhãn được sinh theo thứ tự dòng khi dữ liệu chỉ có một lớp). Kết quả hợp lệ sẽ được cập nhật sau khi chạy lại trên metadata đã chuẩn hóa.
 
 ---
 
-## 3. Hướng dẫn cài đặt và tái lập thực nghiệm
+## 1. Cấu trúc thư mục
 
-Chạy toàn bộ các lệnh sau từ **thư mục gốc** của dự án:
+```
+├── data/
+│   ├── metadata_real.csv        # giọng thật (đã đúng chuẩn 9 cột)
+│   ├── metadata_fake.csv        # giọng giả (từ Task 2)
+│   └── metadata_combined.csv    # do src/prepare_metadata.py tạo ra
+├── src/
+│   ├── prepare_metadata.py      # gộp + kiểm tra metadata
+│   ├── common.py                # nạp metadata + đặc trưng, ghép theo clip_id
+│   ├── features_handcrafted.py  # trích MFCC/LFCC
+│   ├── train_classical.py       # huấn luyện + chọn siêu tham số
+│   ├── evaluate.py              # đánh giá trên test_seen
+│   └── inference_handcrafted.py # wrapper cho app demo
+├── features/mfcc_features.npz   # đặc trưng đã trích (clip_id, X, feature_names)
+├── models/                      # best_model.pkl, model_config.json
+├── results/                     # bảng và biểu đồ kết quả
+└── requirements.txt
+```
 
-### Bước 1: Cài đặt thư viện phụ thuộc
+File audio (`.wav`) **không** được đưa lên repo (xem `.gitignore`).
+
+## 2. Dữ liệu và quy ước
+
+`data/metadata_combined.csv` có đúng 9 cột:
+
+| Cột | Ý nghĩa |
+|---|---|
+| `clip_id` | Mã duy nhất của clip (khóa ghép với đặc trưng) |
+| `path` | Đường dẫn tương đối tới file audio |
+| `label` | `real` hoặc `fake` (mã hóa: real = 0, fake = 1) |
+| `speaker_id` | Người nói. Với giọng giả: **người bị clone** (người nói giọng mẫu) |
+| `source` | Nguồn dữ liệu (ví dụ `vivos`) |
+| `generator` | Công cụ sinh giọng giả; `none` với giọng thật |
+| `channel` | Kênh thu (ví dụ `clean`) |
+| `split` | `train`, `dev`, `test_seen`, `test_unseen`, `test_phone` |
+| `duration` | Độ dài clip (giây) |
+
+Các quy tắc được code **kiểm tra và dừng nếu vi phạm** (không tự sửa hay tự gán):
+
+- `clip_id` không trùng; `label` chỉ nhận `real`/`fake`; `split` thuộc danh sách trên.
+- Một người nói chỉ nằm trong **một** split (chống rò rỉ).
+- `train` và `test_seen` phải có đủ cả real và fake.
+- Giọng giả trong `train` phải có **ít nhất 2 `speaker_id`** (để GroupKFold có fold chứa cả hai lớp).
+- Mọi file audio trong metadata phải tồn tại.
+
+Đặc trưng được ghép với metadata **theo `clip_id`**, không theo thứ tự dòng. Thiếu đặc trưng cho clip nào là báo lỗi.
+
+## 3. Cài đặt
+
 ```bash
 pip install -r requirements.txt
 ```
-### Bước 2: Trích xuất đặc trưng âm thanh (Handcrafted Features)
 
-Chạy lệnh sau tại thư mục gốc của dự án:
+Thư viện: `numpy`, `scipy`, `librosa`, `scikit-learn`, `xgboost`, `joblib`, `pandas`, `matplotlib`, `seaborn`.
+Phiên bản scikit-learn dùng khi huấn luyện được ghi trong `models/model_config.json`; nên dùng cùng phiên bản khi nạp mô hình.
+
+## 4. Cách chạy (từ thư mục gốc của repo)
 
 ```bash
+# 1. Gộp và kiểm tra metadata (tạo data/metadata_combined.csv)
+python src/prepare_metadata.py --audio-dir data/fake --max-real-per-speaker 50
+
+# 2. Trích đặc trưng -> features/mfcc_features.npz
 python src/features_handcrafted.py
-```
 
-**Kết quả:** Tạo tệp đặc trưng âm thanh đã được trích xuất và lưu dưới dạng NumPy nén tại:
-
-```text
-features/mfcc_features.npz
-```
-
-### Bước 3: Huấn luyện mô hình và tìm kiếm siêu tham số
-
-```bash
+# 3. Huấn luyện và chọn siêu tham số -> models/, results/
 python src/train_classical.py
-```
 
-**Kết quả:**
-
-- Lưu mô hình tối ưu tại `models/best_model.pkl`.
-- Xuất trọng số đặc trưng tại `results/feature_importance_weights.csv`.
-
-### Bước 4: Đánh giá mô hình và xuất báo cáo
-
-```bash
+# 4. Đánh giá trên test_seen -> results/
 python src/evaluate.py
 ```
 
-**Kết quả:** Xuất các biểu đồ trực quan và báo cáo đánh giá hiệu năng mô hình vào thư mục `results/`.
+Ghi chú:
 
----
+- `--audio-dir`: thư mục chứa audio giả khi đường dẫn trong `metadata_fake.csv` là đường dẫn trên máy khác (ví dụ `C:\...`). Code tìm theo tên file và báo lỗi nếu có tên trùng giữa các thư mục.
+- `--max-real-per-speaker N`: lấy tối đa N clip real mỗi người nói (seed cố định = 42) để giảm mất cân bằng lớp và thời gian trích đặc trưng. Không thay đổi nhãn, người nói hay split.
+- `evaluate.py --split test_unseen` cho phép đánh giá trên split khác.
 
-## 4. Báo cáo kết quả thực nghiệm (Experimental Results)
+## 5. Chi tiết kỹ thuật
 
-Phần này trình bày kết quả đánh giá mô hình trên tập dữ liệu kiểm thử `test_seen`.
+### 5.1. Đặc trưng (`src/features_handcrafted.py`)
 
-- **Mô hình tối ưu:** SVM với kernel RBF, \(C = 0.1\) hoặc mô hình Ensemble, tùy theo mô hình thực tế được lựa chọn trong quá trình huấn luyện.
-- **Tổng số mẫu đánh giá:** 99 mẫu, bao gồm hai lớp Real và Fake.
+- Âm thanh được nạp ở 16 kHz, mono; `n_fft = 2048`, `hop = 512`.
+- **MFCC**: 13 hệ số (`librosa`). **LFCC**: filterbank tam giác cách đều theo thang Hz, log năng lượng, DCT, giữ 13 hệ số đầu.
+- Mỗi loại lấy `mean` và `std` theo thời gian, tổng cộng **52 chiều**:
+  `mfcc_mean_0..12 | mfcc_std_0..12 | lfcc_mean_0..12 | lfcc_std_0..12`.
+- Tên 52 chiều được lưu trong file `.npz` (`feature_names`). Clip quá ngắn hoặc đặc trưng không hữu hạn sẽ gây lỗi rõ ràng.
+- Hàm `extract_vector(audio_path)` dùng chung cho huấn luyện và suy luận.
 
-### 4.1. Các chỉ số đánh giá
+### 5.2. Huấn luyện (`src/train_classical.py`)
 
-| Chỉ số đánh giá | Giá trị thực nghiệm | Ý nghĩa |
-|---|---:|---|
-| **ROC-AUC Score** | **0.8018** | Đánh giá khả năng phân biệt giữa giọng nói thật và giọng nói giả. |
-| **F1-Score** | **0.7129** | Đánh giá sự cân bằng giữa Precision và Recall. |
-| **Equal Error Rate (EER)** | **0.3000** | Tỷ lệ lỗi tại ngưỡng mà tỷ lệ chấp nhận sai và tỷ lệ từ chối sai bằng nhau. |
+- Chỉ dùng clip có `split == train`. Nếu train chỉ có một lớp hoặc dưới 2 người nói, chương trình dừng và báo lỗi.
+- **GroupKFold** (tối đa 5 fold) theo `speaker_id`; điểm chọn mô hình là ROC-AUC trung bình. Fold chỉ có một lớp bị bỏ qua và số fold thực dùng được ghi lại.
+- Lưới siêu tham số:
+  - Logistic Regression: `C ∈ {0.1, 1, 10}` (có `StandardScaler`)
+  - SVM RBF: `C ∈ {0.1, 1, 10}`, `gamma ∈ {scale, 0.01}` (có `StandardScaler`)
+  - Random Forest: `n_estimators ∈ {100, 300}`, `max_depth ∈ {None, 8}`
+  - XGBoost: `n_estimators ∈ {100, 300}`, `max_depth ∈ {3, 5}`
+- Cấu hình tốt nhất được **huấn luyện lại trên toàn bộ tập train** rồi lưu. `StandardScaler` nằm trong Pipeline nên **không cần file scaler riêng**.
+- Trọng số đặc trưng: hệ số (Logistic Regression), `feature_importances_` (Random Forest, XGBoost) hoặc permutation importance (SVM; dùng tập `dev` nếu hợp lệ, nếu không dùng train và ghi rõ trong cột `method`).
 
-### 4.2. Ma trận nhầm lẫn (Confusion Matrix)
+### 5.3. Đánh giá (`src/evaluate.py`)
 
-Ma trận nhầm lẫn thể hiện số lượng mẫu được phân loại đúng và phân loại sai giữa hai lớp Real và Fake.
+- Dùng **nhãn gốc** trong metadata, ngưỡng phân loại 0,5 cho F1.
+- **EER**: điểm trên đường ROC mà FPR ≈ FNR (lấy trung bình hai giá trị tại điểm gần nhất); ngưỡng tương ứng được lưu.
+- Nếu split đánh giá chỉ có một lớp, chương trình dừng vì AUC/EER không xác định.
 
-```text
-                  Dự đoán Real    Dự đoán Fake
-Nhãn Real              34              16
-Nhãn Fake              13              36
-```
+## 6. Các tệp đầu ra
 
-**Nhận xét:**
+| Tệp | Mô tả |
+|---|---|
+| `features/mfcc_features.npz` | `clip_id`, ma trận `X` (N × 52), `feature_names` |
+| `models/best_model.pkl` | Pipeline/mô hình tốt nhất đã huấn luyện lại trên toàn bộ train |
+| `models/model_config.json` | Thuật toán, tham số, CV AUC, tên đặc trưng, phiên bản scikit-learn |
+| `results/cv_results.csv` | Toàn bộ cấu hình đã thử và ROC-AUC GroupKFold (mean, std, số fold) |
+| `results/cv_best_per_model.csv` | Cấu hình tốt nhất của từng mô hình (để so sánh 4 mô hình) |
+| `results/feature_importance_weights.csv` | Trọng số/mức quan trọng của 52 đặc trưng, kèm cột `type`, `stat`, `method` |
+| `results/evaluation_metrics_summary.csv` | ROC-AUC, EER, ngưỡng EER, F1, số mẫu, số người nói |
+| `results/test_seen_predictions.csv` | Xác suất fake và nhãn dự đoán cho từng clip |
+| `results/confusion_matrix.png` | Ma trận nhầm lẫn |
+| `results/roc_curve.png` | Đường cong ROC |
 
-- Có 34 mẫu Real được phân loại đúng và 16 mẫu Real bị phân loại nhầm thành Fake.
-- Có 36 mẫu Fake được phân loại đúng và 13 mẫu Fake bị phân loại nhầm thành Real.
-- Tổng cộng có 70/99 mẫu được phân loại đúng, tương ứng độ chính xác khoảng 70,71%.
+## 7. Kết quả thực nghiệm
 
-Biểu đồ ma trận nhầm lẫn được lưu tại:
+**Chưa có kết quả hợp lệ.** Kết quả sẽ được điền sau khi chạy pipeline trên `metadata_combined.csv` với:
 
-`results/confusion_matrix.png`
+- giọng giả có `speaker_id` là người bị clone và có `split` tương ứng;
+- tập `test_seen` có đủ real và fake.
 
-### 4.3. Giải thích các chỉ số
+| Chỉ số (test_seen) | Giá trị |
+|---|---|
+| Số mẫu (real / fake) | _chưa có_ |
+| Số người nói | _chưa có_ |
+| ROC-AUC | _chưa có_ |
+| EER | _chưa có_ |
+| F1 (ngưỡng 0,5) | _chưa có_ |
 
-- **ROC-AUC:** Đo lường khả năng phân biệt hai lớp trên nhiều ngưỡng phân loại khác nhau. Giá trị càng gần 1 thì khả năng phân biệt nhìn chung càng tốt.
-- **F1-Score:** Là trung bình điều hòa của Precision và Recall, phù hợp khi cần xem xét đồng thời hai chỉ số.
-- **EER:** Là điểm mà tỷ lệ chấp nhận sai (FAR) bằng tỷ lệ từ chối sai (FRR). Giá trị càng thấp thường cho thấy hiệu năng xác thực càng tốt.
+Khi cập nhật, ghi kèm: nguồn dữ liệu, số clip và số người nói của từng split, mô hình được chọn và CV AUC.
+Nếu EER gần 0, cần kiểm tra rò rỉ dữ liệu (cùng người nói/cùng câu ở train và test) trước khi kết luận.
 
----
+## 8. Tích hợp vào app demo (Task 5)
 
-## 5. Danh mục các tệp đầu ra (Generated Artifacts)
-
-Sau khi hoàn tất quy trình xử lý, hệ thống tạo ra các tệp kết quả sau trong thư mục `results/`:
-
-| STT | Tệp đầu ra | Mô tả |
-|---:|---|---|
-| 1 | `results/confusion_matrix.png` | Biểu đồ ma trận nhầm lẫn, thể hiện số lượng mẫu được phân loại đúng và sai giữa hai lớp Real và Fake. |
-| 2 | `results/roc_curve.png` | Biểu đồ đường cong ROC, thể hiện mối quan hệ giữa TPR và FPR tại các ngưỡng phân loại khác nhau. |
-| 3 | `results/evaluation_metrics_summary.csv` | Bảng tổng hợp các chỉ số đánh giá như ROC-AUC, EER và F1-Score. |
-| 4 | `results/feature_importance_weights.csv` | Bảng trọng số hoặc mức độ đóng góp của các đặc trưng MFCC/LFCC theo phương pháp được triển khai. |
-| 5 | `results/test_seen_predictions.csv` | Bảng kết quả dự đoán trên tập kiểm thử, bao gồm nhãn dự đoán và xác suất dự đoán nếu được xuất bởi chương trình. |
-
-Ngoài ra, các tệp phục vụ huấn luyện và triển khai mô hình được lưu tại:
-
-- `features/mfcc_features.npz`: dữ liệu đặc trưng âm thanh.
-- `models/best_model.pkl`: mô hình học máy đã được lựa chọn sau quá trình huấn luyện.
-
-**Lưu ý:** Danh sách trên mô tả các tệp dự kiến của pipeline. Tên và nội dung thực tế cần khớp với những gì mã nguồn tạo ra.
-
----
-
-## 6. Quy trình đồng bộ Git và nộp bài (Submission Workflow)
-
-Quy trình dưới đây được sử dụng để cập nhật nhánh `main`, tạo nhánh tính năng cho Task 3 và đưa các tệp đã hoàn thiện từ nhánh `Task3` sang nhánh mới.
-
-### Bước 1: Cập nhật nhánh `main`
-
-```bash
-git checkout main
-git pull origin main
-```
-
-### Bước 2: Tạo nhánh tính năng cho Task 3
-
-```bash
-git checkout -b feature/task3-final-update
-```
-
-### Bước 3: Lấy các tệp đã hoàn thiện từ nhánh `Task3`
-
-```bash
-git checkout Task3 -- src/ features/ models/ results/ requirements.txt .gitignore README.md
-```
-
-Lệnh trên lấy các đường dẫn được chỉ định từ nhánh `Task3` và cập nhật chúng vào nhánh hiện tại. Những thay đổi khác trên nhánh hiện tại không bị thay thế nếu nằm ngoài các đường dẫn được chỉ định.
-
-### Bước 4: Kiểm tra và commit thay đổi
-
-```bash
-git status
-git add .
-git commit -m "Complete Task 3: Feature extraction, model training and evaluation"
-```
-
-### Bước 5: Đẩy nhánh lên GitHub
-
-```bash
-git push -u origin feature/task3-final-update
-```
----
-
-## 7. Hướng dẫn tích hợp inference cho App Demo (Task 5 / UI Integration)
-
-Để tích hợp mô hình Handcrafted (Task 3) vào giao diện demo chung của nhóm mà không bị xung đột với các luồng Deep Learning khác, chúng tôi cung cấp lớp wrapper độc lập **`HandcraftedPredictor`**.
-
-### 7.1. Cấu trúc module tích hợp
-- `src/inference_handcrafted.py`: Tự động hóa toàn bộ quy trình `Trích xuất đặc trưng -> StandardScaler -> Dự đoán`.
-
-### 7.2. Code mẫu gọi trực tiếp trong App Demo
 ```python
 from src.inference_handcrafted import HandcraftedPredictor
 
-# 1. Khởi tạo predictor (load sẵn mô hình và scaler)
-predictor = HandcraftedPredictor(
-    model_path="models/best_model.pkl", 
-    scaler_path="models/scaler.pkl"  # Hoặc đường dẫn tương đương nếu có lưu riêng scaler
-)
-
-# 2. Dự đoán cho một file âm thanh đầu vào từ giao diện
-result = predictor.predict_audio("path/to/uploaded_audio.wav")
+predictor = HandcraftedPredictor(model_path="models/best_model.pkl")
+result = predictor.predict_audio("path/to/audio.wav")
 
 if result["status"] == "success":
-    print(f"Nhãn dự đoán: {result['prediction']}")
-    print(f"Xác suất: {result['probability']}")
+    print(result["prediction"])   # "real" hoặc "fake"
+    print(result["prob_fake"])    # xác suất giọng giả, từ 0 đến 1
 else:
-    print(f"Lỗi xử lý: {result['message']}")
-=======
-# viduhocmay
->>>>>>> 3459b5926811c5bd4e50bc899affd3589a21c9eb
+    print(result["message"])      # mô tả lỗi
+```
+
+- `predict_audio` trích đặc trưng 52 chiều từ file, rồi gọi Pipeline đã chứa `StandardScaler`; **không cần `scaler.pkl`** và không scale hai lần.
+- Lỗi (file hỏng, quá ngắn,...) được trả về trong `status = "error"` thay vì làm sập app.
+
+## 9. Hạn chế và lưu ý
+
+- Mô hình chỉ dùng đặc trưng thủ công mức clip, không xét thông tin theo thời gian; hiệu năng trên giọng giả sinh bởi công cụ chưa gặp (`test_unseen`) có thể thấp hơn nhiều so với `test_seen`.
+- Mất cân bằng lớp (real nhiều hơn fake rất nhiều) được giảm bằng `--max-real-per-speaker`; cần ghi rõ giá trị đã dùng khi báo cáo.
+- Nếu dùng bộ dữ liệu tạm khi dữ liệu chính thức chưa sẵn sàng, phải ghi rõ nguồn, số clip, số người nói và gọi đó là kết quả tạm.
+- Không tự gán nhãn, `speaker_id` hay `split` khi metadata thiếu: code sẽ dừng và báo lỗi để người dùng sửa dữ liệu gốc.
+
+## 10. Quy trình Git
+
+```bash
+git add src requirements.txt README.md .gitignore
+git commit -m "Mô tả rõ thay đổi"
+git push
+
+# Sau khi chạy xong pipeline:
+git add data/metadata_combined.csv features results models
+git commit -m "Add Task 3 results"
+git push
+```
+
+Commit và đẩy kết quả ngay sau khi chạy để tránh mất bằng chứng thực nghiệm.
