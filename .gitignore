@@ -1,0 +1,11 @@
+# Bỏ qua các tệp âm thanh ở mọi thư mục
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aac
+*.wma
+*.opus
+
+!data/*.csv
