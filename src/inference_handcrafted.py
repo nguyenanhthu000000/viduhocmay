@@ -1,36 +1,24 @@
+"""Wrapper cho demo (Task 5): HandcraftedPredictor(model).predict_audio(wav) -> dict.
+Pipeline đã chứa StandardScaler nên KHÔNG cần scaler.pkl và không scale lần hai."""
 import joblib
-import numpy as np
-from src.features_handcrafted import extract_features
+try:
+    from src.features_handcrafted import extract_vector
+except ImportError:
+    from features_handcrafted import extract_vector
+
+
 class HandcraftedPredictor:
-    def __init__(self, model_path="models/best_model.pkl", scaler_path="models/scaler.pkl"):
-        """
-        Khởi tạo, load sẵn mô hình cổ điển (SVM/RF/XGB) và Standard Scaler đã train bằng GroupKFold.
-        """
+    def __init__(self, model_path="models/best_model.pkl"):
         self.model = joblib.load(model_path)
-        self.scaler = joblib.load(scaler_path)
+        self.fake_idx = list(self.model.classes_).index(1)   # 1 = fake
+
+    def predict_fake_proba(self, audio_path):
+        vec = extract_vector(audio_path).reshape(1, -1)
+        return float(self.model.predict_proba(vec)[0, self.fake_idx])
 
     def predict_audio(self, audio_path):
-        """
-        Hàm inference độc lập: Nhận file .wav -> Trích xuất -> Scale -> Trả về kết quả (Real/Fake).
-        """
         try:
-            # Trích xuất đặc trưng thủ công từ file âm thanh thô
-            features = extract_features(audio_path)
-            
-            # mảng 2D và chuẩn hóa bằng mean/std lúc train
-            features_scaled = self.scaler.transform(features.reshape(1, -1))
-            
-            # Dự đoán nhãn và lấy xác suất
-            prediction = self.model.predict(features_scaled)[0]
-            probability = self.model.predict_proba(features_scaled)[0]
-            
-            return {
-                "status": "success",
-                "prediction": str(prediction),
-                "probability": probability.tolist()
-            }
+            p = self.predict_fake_proba(audio_path)
+            return {"status": "success", "prediction": "fake" if p >= 0.5 else "real", "prob_fake": p}
         except Exception as e:
-            return {
-                "status": "error",
-                "message": str(e)
-            }
+            return {"status": "error", "message": str(e)}

@@ -1,168 +1,116 @@
-import os
-import numpy as np
-import pandas as pd
-import joblib
-from sklearn.linear_model import LogisticRegression
-from sklearn.svm import SVC
+"""Huấn luyện LR / SVM / RF / XGBoost, chọn tham số bằng GroupKFold theo speaker_id (chỉ split=train).
+Chạy:  python src/train_classical.py [--metadata ...] [--features ...]
+"""
+import argparse, json, os, sys
+import numpy as np, pandas as pd, joblib, sklearn
+from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
-from xgboost import XGBClassifier
-from sklearn.model_selection import GroupKFold
+from sklearn.inspection import permutation_importance
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from common import load_split
 
-def train_and_evaluate():
-    metadata_paths = ["data/metadata_combined.csv", "data/metadata_fake.csv", "data/metadata_real.csv", "data/metadata.csv"]
-    metadata_path = None
-    for path in metadata_paths:
-        if os.path.exists(path):
-            metadata_path = path
-            break
-           
-    feature_path = "features/mfcc_features.npz"
-   
-    if not metadata_path or not os.path.exists(feature_path):
-        raise FileNotFoundError("Thiếu file metadata hoặc file đặc trưng mfcc_features.npz!")
-       
-    try:
-        metadata = pd.read_csv(metadata_path)
-    except Exception:
-        metadata = pd.DataFrame()
-       
-    if metadata.empty or metadata.shape[1] <= 1:
-        with open(metadata_path, 'r', encoding='utf-8', errors='ignore') as f:
-            lines = f.readlines()
-        parsed_data = []
-        for idx, line in enumerate(lines[1:]):
-            parts = line.strip().split(',')
-            parsed_data.append({
-                'clip_id': f"clip_{idx}",
-                'path': parts[0] if len(parts) > 0 else "",
-                'speaker_id': f"speaker_{idx % 5}",
-                'split': 'train',
-                'label': 'fake'
-            })
-        metadata = pd.DataFrame(parsed_data)
+try:
+    from xgboost import XGBClassifier
+except ImportError:
+    XGBClassifier = None
 
-    if 'clip_id' not in metadata.columns:
-        metadata['clip_id'] = [f"clip_{i}" for i in range(len(metadata))]
-    if 'speaker_id' not in metadata.columns:
-        metadata['speaker_id'] = [f"speaker_{i % 5}" for i in range(len(metadata))]
-    if 'split' not in metadata.columns:
-        metadata['split'] = 'train'
-    if 'label' not in metadata.columns:
-        metadata['label'] = 'fake'
-       
-    data = np.load(feature_path, allow_pickle=True)
-    feat_dict = {str(cid): vec for cid, vec in zip(data['clip_id'], data['X'])}
-   
-    metadata['clip_id'] = metadata['clip_id'].astype(str)
-    valid_indices = [i for i, cid in enumerate(metadata['clip_id']) if cid in feat_dict]
-    metadata_filtered = metadata.iloc[valid_indices].reset_index(drop=True)
-   
-    if len(valid_indices) == 0 and len(metadata) == len(data['clip_id']):
-        metadata['clip_id'] = [str(c) for c in data['clip_id']]
-        metadata_filtered = metadata.reset_index(drop=True)
-        feat_dict = {str(cid): vec for cid, vec in zip(data['clip_id'], data['X'])}
-       
-    X = np.array([feat_dict[cid] for cid in metadata_filtered['clip_id']])
-   
-    y_raw = metadata_filtered['label'].apply(lambda x: 1 if str(x).strip().lower() in ['fake', '1', 'spoof', 'pos'] else 0).values
-    if len(np.unique(y_raw)) < 2:
-        y = np.array([i % 2 for i in range(len(X))])
-    else:
-        y = y_raw
-   
-    groups = metadata_filtered['speaker_id'].values
-    train_mask = metadata_filtered['split'].isin(['train', 'train_seen'])
-    if train_mask.sum() == 0:
-        train_mask = np.ones(len(metadata_filtered), dtype=bool)
-       
-    X_train_full = X[train_mask]
-    y_train_full = y[train_mask]
-    groups_train = groups[train_mask]
-   
-    n_splits = min(5, len(np.unique(groups_train)))
-    if n_splits < 2:
-        n_splits = 2
-    gkf = GroupKFold(n_splits=n_splits)
-   
-    candidate_configs = [
-        ("LogisticRegression", Pipeline([('scaler', StandardScaler()), ('clf', LogisticRegression(max_iter=1000, random_state=42))]), [{'clf__C': 0.1}, {'clf__C': 1.0}, {'clf__C': 10.0}]),
-        ("SVM", Pipeline([('scaler', StandardScaler()), ('clf', SVC(probability=True, random_state=42))]), [{'clf__C': 0.1}, {'clf__C': 1.0}, {'clf__C': 10.0}]),
-        ("RandomForest", RandomForestClassifier(random_state=42), [{'n_estimators': 50, 'max_depth': None}, {'n_estimators': 100, 'max_depth': 5}]),
-        ("XGBoost", XGBClassifier(eval_metric='logloss', random_state=42), [{'max_depth': 3, 'n_estimators': 50}, {'max_depth': 5, 'n_estimators': 100}])
+
+def candidates():
+    scaled = lambda clf: Pipeline([("scaler", StandardScaler()), ("clf", clf)])
+    cfg = [
+        ("LogisticRegression", scaled(LogisticRegression(max_iter=2000, random_state=42)),
+         [{"clf__C": c} for c in (0.1, 1.0, 10.0)]),
+        ("SVM", scaled(SVC(kernel="rbf", probability=True, random_state=42)),
+         [{"clf__C": c, "clf__gamma": g} for c in (0.1, 1.0, 10.0) for g in ("scale", 0.01)]),
+        ("RandomForest", RandomForestClassifier(random_state=42),
+         [{"n_estimators": n, "max_depth": d} for n in (100, 300) for d in (None, 8)]),
     ]
-   
-    best_score = -1.0
-    best_model_name = ""
-    best_config_model = None
-   
-    print("--- BẮT ĐẦU TÌM SIÊU THAM SỐ TỐI ƯU VỚI GROUPKFOLD ---")
-   
-    for algo_name, base_model, param_gridbandits in candidate_configs:
-        for params in param_gridbandits:
-            base_model.set_params(**params)
-            config_name = f"{algo_name}_{params}"
-            fold_scores = []
-           
-            try:
-                for train_idx, val_idx in gkf.split(X_train_full, y_train_full, groups=groups_train):
-                    X_tr, X_va = X_train_full[train_idx], X_train_full[val_idx]
-                    y_tr, y_va = y_train_full[train_idx], y_train_full[val_idx]
-                   
-                    base_model.fit(X_tr, y_tr)
-                    y_pred_prob = base_model.predict_proba(X_va)[:, 1]
-                    if len(np.unique(y_va)) > 1:
-                        auc = roc_auc_score(y_va, y_pred_prob)
-                        fold_scores.append(auc)
-                   
-                if fold_scores:
-                    mean_auc = np.mean(fold_scores)
-                    print(f"Cấu hình [{config_name}] -> ROC-AUC trung bình: {mean_auc:.4f}")
-                    if mean_auc > best_score:
-                        best_score = mean_auc
-                        best_model_name = config_name
-                        from sklearn.base import clone
-                        best_config_model = clone(base_model)
-                        best_config_model.set_params(**params)
-            except Exception as e:
-                print(f"Lỗi khi chạy cấu hình {config_name}: {e}")
-               
-    if best_config_model is None:
-        print("[CẢNH BÁO] Sử dụng mô hình LogisticRegression mặc định do GroupKFold không khớp nhóm.")
-        best_config_model = Pipeline([('scaler', StandardScaler()), ('clf', LogisticRegression(random_state=42))])
-        best_model_name = "Fallback_LR"
-       
-    print(f"\n[KẾT QUẢ] Mô hình tối ưu nhất: {best_model_name} (AUC/Score: {best_score:.4f})")
-    print("Đang huấn luyện lại mô hình tốt nhất trên toàn bộ tập train...")
-    best_config_model.fit(X_train_full, y_train_full)
-   
-    os.makedirs("models", exist_ok=True)
-    os.makedirs("results", exist_ok=True)
-    joblib.dump(best_config_model, "models/best_model.pkl")
-    print("[THÀNH CÔNG] Đã lưu mô hình tại models/best_model.pkl")
+    if XGBClassifier is not None:
+        cfg.append(("XGBoost", XGBClassifier(eval_metric="logloss", random_state=42),
+                    [{"n_estimators": n, "max_depth": d} for n in (100, 300) for d in (3, 5)]))
+    else:
+        print("[CẢNH BÁO] Chưa cài xgboost -> bỏ qua XGBoost (pip install xgboost)")
+    return cfg
 
-    # Xuất trọng số đặc trưng (Feature Importance / Coefficients)
-    try:
-        clf_step = best_config_model.named_steps.get('clf', best_config_model[-1]) if hasattr(best_config_model, 'named_steps') else best_config_model
-        if hasattr(clf_step, 'coef_'):
-            coefs = clf_step.coef_[0]
-            feature_names = [f"MFCC/LFCC_dim_{i}" for i in range(len(coefs))]
-            df_imp = pd.DataFrame({'Feature': feature_names, 'Coefficient': coefs})
-            df_imp['Abs_Coefficient'] = df_imp['Coefficient'].abs()
-            df_imp = df_imp.sort_values(by='Abs_Coefficient', ascending=False)
-            df_imp.to_csv("results/feature_importance_weights.csv", index=False)
-            print("[THÀNH CÔNG] Đã xuất bảng trọng số đặc trưng ra results/feature_importance_weights.csv")
-        elif hasattr(clf_step, 'feature_importances_'):
-            importances = clf_step.feature_importances_
-            feature_names = [f"MFCC/LFCC_dim_{i}" for i in range(len(importances))]
-            df_imp = pd.DataFrame({'Feature': feature_names, 'Importance': importances})
-            df_imp = df_imp.sort_values(by='Importance', ascending=False)
-            df_imp.to_csv("results/feature_importance_weights.csv", index=False)
-            print("[THÀNH CÔNG] Đã xuất bảng mức độ quan trọng đặc trưng ra results/feature_importance_weights.csv")
-    except Exception as ex:
-        print(f"Không thể xuất file feature importance: {ex}")
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--metadata", default="data/metadata_combined.csv")
+    ap.add_argument("--features", default="features/mfcc_features.npz")
+    a = ap.parse_args()
+
+    meta, X, y, groups, names = load_split(a.metadata, a.features, ["train"])
+    if len(set(y)) < 2:
+        sys.exit("[LỖI] Tập train chỉ có một lớp. Cần cả real và fake, không tự đổi nhãn.")
+    n_spk = len(set(groups))
+    if n_spk < 2:
+        sys.exit("[LỖI] Cần ít nhất 2 người nói trong train để chạy GroupKFold.")
+    gkf = GroupKFold(n_splits=min(5, n_spk))
+    print(f"Train: {len(y)} clip, {n_spk} người nói, real={int((y==0).sum())}, fake={int((y==1).sum())}")
+
+    rows = []
+    for algo, base, grid in candidates():
+        for params in grid:
+            scores = []
+            for tr, va in gkf.split(X, y, groups):
+                if len(set(y[va])) < 2 or len(set(y[tr])) < 2:
+                    continue                                 # fold một lớp không tính được AUC
+                m = clone(base).set_params(**params).fit(X[tr], y[tr])
+                scores.append(roc_auc_score(y[va], m.predict_proba(X[va])[:, 1]))
+            if not scores:
+                continue
+            rows.append({"algo": algo, "params": json.dumps(params), "cv_auc_mean": np.mean(scores),
+                         "cv_auc_std": np.std(scores), "n_folds_used": len(scores)})
+            print(f"{algo} {params} -> AUC {np.mean(scores):.4f} (±{np.std(scores):.4f}, {len(scores)} fold)")
+    if not rows:
+        sys.exit("[LỖI] Không fold nào có đủ hai lớp. Kiểm tra lại phân bố người nói / nhãn.")
+    cv = pd.DataFrame(rows).sort_values("cv_auc_mean", ascending=False)
+    os.makedirs("results", exist_ok=True); os.makedirs("models", exist_ok=True)
+    cv.to_csv("results/cv_results.csv", index=False)
+
+    # Kết quả tốt nhất của TỪNG mô hình (để so sánh 4 mô hình)
+    best_per_algo = cv.groupby("algo").head(1)
+    best_per_algo.to_csv("results/cv_best_per_model.csv", index=False)
+    top = cv.iloc[0]
+    base = {n: b for n, b, _ in candidates()}[top["algo"]]
+    final = clone(base).set_params(**json.loads(top["params"])).fit(X, y)   # refit trên TOÀN BỘ train
+    joblib.dump(final, "models/best_model.pkl")
+    with open("models/model_config.json", "w", encoding="utf-8") as f:
+        json.dump({"algo": top["algo"], "params": json.loads(top["params"]), "cv_auc": float(top["cv_auc_mean"]),
+                   "feature_names": names, "label_map": {"real": 0, "fake": 1},
+                   "sklearn_version": sklearn.__version__, "n_train": int(len(y)), "n_speakers": n_spk}, f,
+                  ensure_ascii=False, indent=2)
+    print(f"[OK] Mô hình tốt nhất: {top['algo']} {top['params']} (CV AUC {top['cv_auc_mean']:.4f})")
+
+    # Feature importance: hệ số (LR) / importance (RF, XGB) / permutation (SVM) -> luôn có kết quả
+    clf = final.named_steps["clf"] if hasattr(final, "named_steps") else final
+    if hasattr(clf, "coef_"):
+        imp = pd.DataFrame({"feature": names, "value": clf.coef_[0]}); how = "coefficient"
+    elif hasattr(clf, "feature_importances_"):
+        imp = pd.DataFrame({"feature": names, "value": clf.feature_importances_}); how = "impurity_importance"
+    else:
+        try:
+            _, Xe, ye, _, _ = load_split(a.metadata, a.features, ["dev"])
+            dev_ok = len(set(ye)) == 2
+        except ValueError:
+            dev_ok = False
+        if not dev_ok:
+            Xe, ye = X, y                                    # không có dev hợp lệ: dùng train (ghi rõ trong cột method)
+        pi = permutation_importance(final, Xe, ye, scoring="roc_auc", n_repeats=10, random_state=42)
+        imp = pd.DataFrame({"feature": names, "value": pi.importances_mean}); how = "permutation_" + ("dev" if dev_ok else "train")
+    imp["type"] = imp["feature"].str.split("_").str[0]       # mfcc / lfcc
+    imp["stat"] = imp["feature"].str.split("_").str[1]       # mean / std
+    imp["method"] = how
+    imp["abs_value"] = imp["value"].abs()
+    imp.sort_values("abs_value", ascending=False).drop(columns="abs_value").to_csv(
+        "results/feature_importance_weights.csv", index=False)
+    print("[OK] results/feature_importance_weights.csv, cv_results.csv, models/best_model.pkl")
+
 
 if __name__ == "__main__":
-    train_and_evaluate()
+    main()

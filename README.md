@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ## 1. Tổng quan nhiệm vụ (Task Overview)
 Task 3 đóng vai trò xây dựng hệ thống nền tảng (**Baseline & Classical Machine Learning**) cho toàn bộ đồ án phát hiện giọng nói giả. Nhiệm vụ cốt lõi bao gồm:
 * **Chuyển đổi tín hiệu âm thanh:** Biến đổi các file âm thanh thô thành vector đặc trưng âm học chuyên sâu thông qua kỹ thuật **MFCC** và **LFCC**.
@@ -188,3 +189,6 @@ if result["status"] == "success":
     print(f"Xác suất: {result['probability']}")
 else:
     print(f"Lỗi xử lý: {result['message']}")
+=======
+# viduhocmay
+>>>>>>> 3459b5926811c5bd4e50bc899affd3589a21c9eb
